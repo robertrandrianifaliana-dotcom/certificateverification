@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Certificate Verification Portal</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #eef2ff; } /* Light Blue/Indigo background */
+        .card { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 0 10px -5px rgba(0, 0, 0, 0.04); }
+        .bg-primary { background-color: #4f46e5; } /* Indigo 600 */
+        .text-primary { color: #4f46e5; }
+    </style>
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        
+        let db;
+        let authReady = false;
+
+        // Set Firebase logging level to Debug
+        setLogLevel('Debug');
+
+        // --- CORE FIREBASE SETUP ---
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            const auth = getAuth(app);
+
+            // Since this is a public portal, we sign in anonymously to allow read access
+            // based on the Firestore Security Rules defined in the guide.
+            signInAnonymously(auth).then(() => {
+                console.log('Public user signed in anonymously.');
+                authReady = true;
+                // Once authenticated (and thus authorized to read public data), start verification
+                verifyCertificate();
+            }).catch(error => {
+                console.error('Firebase Auth failed:', error);
+                document.getElementById('content').innerHTML = renderError('Authentication Error', 'Could not connect to the verification service. Please try again later.');
+            });
+
+        } catch (error) {
+            console.error('Failed to initialize Firebase:', error);
+            document.getElementById('content').innerHTML = renderError('System Error', 'Could not initialize database connection.');
+        }
+
+        // --- DB PATH CONFIGURATION ---
+        const PUBLIC_COLLECTION_PATH = `/artifacts/${appId}/public/data/certificates`;
+
+        // --- HELPER RENDER FUNCTIONS ---
+        function renderLoading() {
+            return `
+                <div class="text-center p-8">
+                    <div class="animate-spin inline-block w-10 h-10 border-4 border-t-4 border-primary border-opacity-25 rounded-full border-t-primary"></div>
+                    <p class="text-gray-600 mt-4">Verifying certificate authenticity...</p>
+                </div>
+            `;
+        }
+
+        function renderError(title, message) {
+            return `
+                <div class="p-8 bg-red-100 border-l-4 border-red-500 text-red-700 rounded-lg">
+                    <h2 class="text-2xl font-bold mb-2 flex items-center">
+                        <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.332 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        ${title}
+                    </h2>
+                    <p>${message}</p>
+                </div>
+            `;
+        }
+        
+        function renderVerified(data) {
+            const dateOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+            const issuedDate = new Date(data.issued_at).toLocaleDateString(undefined, dateOptions);
+
+            return `
+                <div class="p-8 bg-white rounded-xl card border-t-8 border-green-500">
+                    <h2 class="text-3xl font-extrabold text-green-600 mb-4 flex items-center">
+                        <svg class="w-8 h-8 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        Certificate Verification SUCCESS
+                    </h2>
+                    <p class="text-gray-600 mb-6">This certificate is officially registered in our database and is considered valid.</p>
+
+                    <div class="space-y-4">
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <p class="text-sm font-semibold text-gray-500">Certificate Holder</p>
+                            <p class="text-xl font-bold text-gray-800">${data.name}</p>
+                        </div>
+                        
+                        <div class="p-4 bg-gray-50 rounded-lg">
+                            <p class="text-sm font-semibold text-gray-500">Degree/Program</p>
+                            <p class="text-xl font-bold text-gray-800">${data.degree}</p>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="p-4 bg-gray-50 rounded-lg">
+                                <p class="text-sm font-semibold text-gray-500">Graduation Date</p>
+                                <p class="text-lg font-bold text-gray-800">${data.grad_date}</p>
+                            </div>
+                            <div class="p-4 bg-gray-50 rounded-lg">
+                                <p class="text-sm font-semibold text-gray-500">Certificate ID</p>
+                                <p class="text-lg font-bold text-primary font-mono">${data.id}</p>
+                            </div>
+                        </div>
+
+                        <div class="p-4 bg-yellow-50 rounded-lg text-sm text-yellow-800">
+                            <p>Issued On: ${issuedDate}</p>
+                        </div>
+                        
+                        <!-- Link to PDF if available -->
+                        ${data.pdf_url ? `
+                            <div class="pt-4">
+                                <a href="${data.pdf_url}" target="_blank" class="w-full inline-flex justify-center items-center px-4 py-3 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary hover:bg-indigo-700 transition duration-150">
+                                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                    View Original Certificate PDF
+                                </a>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- MAIN VERIFICATION LOGIC ---
+        async function verifyCertificate() {
+            document.getElementById('content').innerHTML = renderLoading();
+            
+            // 1. Get the ID from the URL query parameters
+            const urlParams = new URLSearchParams(window.location.search);
+            const certId = urlParams.get('id');
+
+            if (!certId) {
+                document.getElementById('content').innerHTML = renderError('Missing ID', 'No certificate ID was found in the link. Please ensure you scanned the correct QR code.');
+                return;
+            }
+
+            if (!authReady) {
+                 // Wait a moment for anonymous sign-in to complete if necessary
+                 await new Promise(resolve => setTimeout(resolve, 500));
+            }
+
+            try {
+                // 2. Fetch the document from Firestore
+                const docRef = doc(db, PUBLIC_COLLECTION_PATH, certId);
+                const docSnap = await getDoc(docRef);
+
+                // 3. Check if the document exists and is valid
+                if (docSnap.exists() && docSnap.data().valid) {
+                    // Success: Render the verified details
+                    document.getElementById('content').innerHTML = renderVerified(docSnap.data());
+                } else if (docSnap.exists() && !docSnap.data().valid) {
+                    // Record exists but is marked invalid/revoked
+                    document.getElementById('content').innerHTML = renderError('Certificate Revoked', 'This certificate ID is registered but has been marked as invalid by the issuing authority.');
+                }
+                else {
+                    // Record does not exist
+                    document.getElementById('content').innerHTML = renderError('Verification Failed', `The certificate ID **${certId}** could not be found in our database.`);
+                }
+
+            } catch (error) {
+                console.error("Error fetching document: ", error);
+                document.getElementById('content').innerHTML = renderError('Database Access Error', 'There was an error communicating with the database. Please try again.');
+            }
+        }
+
+    </script>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-2xl">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-extrabold text-gray-800">Official Certificate Verification</h1>
+            <p class="text-gray-500 mt-2">Scan the QR code or enter the URL directly to verify authenticity.</p>
+        </header>
+
+        <main id="content" class="min-h-72"></main>
+        
+        <footer class="mt-10 text-center text-xs text-gray-400">
+            <p>&copy; ${new Date().getFullYear()} Institution Name. All rights reserved.</p>
+            <p class="mt-1">Verification system powered by Firebase & Gemini.</p>
+        </footer>
+
+    </div>
+
+</body>
+</html>
