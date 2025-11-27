@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Certificate Issuer Portal - Admin</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .card { box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 0 10px -5px rgba(0, 0, 0, 0.04); }
+        .bg-admin { background-color: #5d50c9; } /* Deep Purple/Admin Color */
+        .text-admin { color: #5d50c9; }
+    </style>
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // NOTE: For full PDF storage, you would also need to import Firebase Storage
+        // import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-storage.js";
+
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth;
+        let isAuthReady = false;
+        
+        // Set Firebase logging level to Debug
+        setLogLevel('Debug');
+
+        // --- CORE FIREBASE SETUP ---
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            // storage = getStorage(app); // Initialize Storage
+
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    console.log('Admin user signed in:', user.uid);
+                } else {
+                    console.log('No user signed in, attempting sign-in...');
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            // Using anonymous sign-in for simplicity, but in a real admin portal,
+                            // you would want a secure user login (e.g., email/password or custom tokens).
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error('Firebase Auth failed:', error);
+                        document.getElementById('statusMessage').innerHTML = '<div class="p-4 bg-red-100 text-red-700 rounded-lg">Authentication Failed. Please contact support.</div>';
+                    }
+                }
+                isAuthReady = true;
+                document.getElementById('submitCertificate').disabled = false;
+            });
+        } catch (error) {
+            console.error('Failed to initialize Firebase:', error);
+            document.getElementById('statusMessage').innerHTML = '<div class="p-4 bg-red-100 text-red-700 rounded-lg">Error: Could not initialize database connection.</div>';
+        }
+
+        // --- QR CODE & DB PATH CONFIGURATION ---
+        const PUBLIC_COLLECTION_PATH = `/artifacts/${appId}/public/data/certificates`;
+        
+        // IMPORTANT: Replace this with the final public URL of your Verification Portal (index.html)
+        // This is the page the QR code will direct scanners to.
+        const VERIFICATION_PORTAL_URL = "https://your-public-app-url.com/index.html"; 
+        
+        // QR Code Generator API (uses goqr.me)
+        const QR_API_URL = "https://api.qrserver.com/v1/create-qr-code/";
+
+        // --- MOCK STORAGE UPLOAD FUNCTION ---
+        // Since we cannot fully set up Firebase Storage in this environment, this function mocks the upload process.
+        // In a real application, you would use getStorage, ref, uploadBytes, and getDownloadURL.
+        async function uploadPdfToStorage(file, certId) {
+            // Mocking the upload process
+            console.log(`Mocking upload of file: ${file.name} for certificate ID: ${certId}`);
+            
+            // Generate a mock public URL based on the certificate ID
+            const mockPublicUrl = `https://mock-storage.google.com/${appId}/certificates/${certId}.pdf`;
+            
+            // Simulate network delay
+            await new Promise(resolve => setTimeout(resolve, 1500)); 
+            
+            console.log(`Mock upload successful. Public URL: ${mockPublicUrl}`);
+            return mockPublicUrl;
+        }
+
+
+        // --- FUNCTIONS ---
+        function generateUniqueCertId() {
+            // A simple UUID generator. You might add a prefix like "UoM-" for better branding.
+            const uuid = crypto.randomUUID().toUpperCase().substring(0, 10).replace(/-/g, '');
+            return `UoM-${new Date().getFullYear()}-${uuid}`;
+        }
+
+        function generateQRData(certId) {
+            // The QR code links to the verification portal and passes the ID as a query parameter
+            return `${VERIFICATION_PORTAL_URL}?id=${certId}`;
+        }
+
+        async function createCertificate(event) {
+            event.preventDefault();
+            
+            if (!isAuthReady) {
+                showMessage('Database is not ready. Please wait a moment.', 'yellow');
+                return;
+            }
+
+            const name = document.getElementById('studentName').value.trim();
+            const degree = document.getElementById('degreeProgram').value.trim();
+            const gradDate = document.getElementById('gradDate').value;
+            const pdfFile = document.getElementById('certificatePdf').files[0];
+
+            if (!name || !degree || !gradDate) {
+                showMessage('Please fill in all required fields.', 'yellow');
+                return;
+            }
+            if (!pdfFile || pdfFile.type !== 'application/pdf') {
+                showMessage('Please select a PDF file for upload.', 'yellow');
+                return;
+            }
+
+            const certId = generateUniqueCertId();
+            const qrData = generateQRData(certId);
+
+            const loading = document.getElementById('loading');
+            loading.classList.remove('hidden');
+
+            try {
+                // 1. Upload the PDF file and get the public download URL
+                const pdfUrl = await uploadPdfToStorage(pdfFile, certId);
+
+                // 2. Prepare Firestore data
+                const certificateData = {
+                    id: certId,
+                    name: name,
+                    degree: degree,
+                    grad_date: gradDate,
+                    pdf_url: pdfUrl, // Save the public URL to Firestore
+                    valid: true, 
+                    issued_at: new Date().toISOString()
+                };
+
+                // 3. Save the data to Firestore
+                const docRef = doc(db, PUBLIC_COLLECTION_PATH, certId);
+                await setDoc(docRef, certificateData);
+
+                // 4. Construct QR Code Image URL
+                const qrCodeImageUrl = `${QR_API_URL}?size=250x250&data=${encodeURIComponent(qrData)}`;
+
+                // Display results
+                const resultDiv = document.getElementById('result');
+                resultDiv.innerHTML = `
+                    <div class="p-6 bg-green-50 rounded-xl border border-green-300">
+                        <h3 class="text-xl font-bold text-green-700 mb-4">✅ Certificate Successfully Issued and Saved!</h3>
+                        
+                        <div class="space-y-3 mb-6">
+                            <p><span class="font-semibold">Certificate ID:</span> <span class="font-mono text-lg text-admin">${certId}</span></p>
+                            <p><span class="font-semibold">Verification Link (Encoded in QR):</span> <a href="${qrData}" target="_blank" class="text-blue-500 hover:underline break-all">${qrData}</a></p>
+                            <p><span class="font-semibold">Certificate PDF URL:</span> <a href="${pdfUrl}" target="_blank" class="text-blue-500 hover:underline break-all">${pdfUrl}</a></p>
+                        </div>
+                        
+                        <div class="text-center p-4 bg-white rounded-lg border-dashed border-2 border-gray-300">
+                            <h4 class="font-bold text-gray-700 mb-3">QR Code for Printing</h4>
+                            <img src="${qrCodeImageUrl}" alt="Certificate QR Code" class="mx-auto border-4 border-gray-100 rounded-lg shadow-md">
+                            <p class="mt-4 text-sm text-gray-600">Print this image directly onto the physical certificate or embed it into the digital PDF.</p>
+                        </div>
+                    </div>
+                `;
+                
+                // Clear form after success
+                document.getElementById('issuanceForm').reset();
+                showMessage('New Certificate record created and PDF uploaded!', 'green');
+
+            } catch (error) {
+                console.error("Error creating document: ", error);
+                showMessage(`Error saving data: ${error.message}`, 'red');
+            } finally {
+                loading.classList.add('hidden');
+            }
+        }
+
+        function showMessage(message, type) {
+            const msgDiv = document.getElementById('statusMessage');
+            let colorClass = '';
+            switch (type) {
+                case 'green': colorClass = 'bg-green-100 text-green-700'; break;
+                case 'red': colorClass = 'bg-red-100 text-red-700'; break;
+                case 'yellow': colorClass = 'bg-yellow-100 text-yellow-700'; break;
+                default: colorClass = 'bg-gray-100 text-gray-700';
+            }
+            msgDiv.innerHTML = `<div class="p-4 ${colorClass} rounded-lg transition-opacity duration-300">${message}</div>`;
+            setTimeout(() => { msgDiv.innerHTML = ''; }, 5000);
+        }
+
+        // Attach event listener after document is fully loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('issuanceForm').addEventListener('submit', createCertificate);
+        });
+    </script>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="w-full max-w-xl bg-white card rounded-2xl p-6 md:p-10">
+
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-extrabold text-gray-800 flex items-center justify-center space-x-2">
+                <span class="text-admin">⚙️</span>
+                <span>Certificate Issuer Portal</span>
+            </h1>
+            <p class="text-gray-500 mt-2">Securely issue new student certificates, upload the PDF, and generate verifiable QR codes.</p>
+            <p class="mt-4 text-sm font-bold text-red-600 p-2 bg-red-100 rounded-lg">
+                
+            </p>
+        </header>
+
+        <div id="statusMessage" class="my-4"></div>
+
+        <!-- Issuance Form -->
+        <form id="issuanceForm" class="space-y-6 p-6 bg-gray-50 rounded-xl">
+            
+            <div>
+                <label for="studentName" class="block text-sm font-medium text-gray-700 mb-1">Student Full Name</label>
+                <input type="text" id="studentName" required
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-1 focus:ring-admin focus:border-admin transition duration-150">
+            </div>
+
+            <div>
+                <label for="degreeProgram" class="block text-sm font-medium text-gray-700 mb-1">Level </label>
+                <input type="text" id="degreeProgram" placeholder="e.g., Bachelor of Science in Computer Engineering" required
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-1 focus:ring-admin focus:border-admin transition duration-150">
+            </div>
+
+            <div>
+                <label for="gradDate" class="block text-sm font-medium text-gray-700 mb-1">Date of Graduation (YYYY-MM-DD)</label>
+                <input type="date" id="gradDate" required
+                       class="w-full p-3 border border-gray-300 rounded-lg focus:ring-1 focus:ring-admin focus:border-admin transition duration-150">
+            </div>
+
+            <!-- NEW PDF UPLOAD FIELD -->
+            <div>
+                <label for="certificatePdf" class="block text-sm font-medium text-gray-700 mb-1">Upload Certificate PDF</label>
+                <input type="file" id="certificatePdf" accept="application/pdf" required
+                       class="w-full p-3 border border-gray-300 bg-white rounded-lg focus:ring-1 focus:ring-admin focus:border-admin transition duration-150 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-50 file:text-admin hover:file:bg-purple-100">
+                <p class="mt-1 text-xs text-gray-500">The PDF will be uploaded to a mock storage location, and the URL will be saved with the record.</p>
+            </div>
+
+            <button type="submit" id="submitCertificate" disabled
+                    class="w-full bg-admin text-white font-bold py-3 px-6 rounded-lg hover:bg-purple-700 transition duration-150 focus:outline-none focus:ring-2 focus:ring-admin focus:ring-offset-2 disabled:opacity-50">
+                Issue, Upload PDF, & Save Record
+            </button>
+        </form>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="hidden text-center my-6">
+            <div class="animate-spin inline-block w-8 h-8 border-4 border-t-4 border-admin border-opacity-25 rounded-full border-t-admin"></div>
+            <p class="text-gray-500 mt-2">Issuing certificate, uploading PDF, and saving data...</p>
+        </div>
+
+        <!-- Results Area (QR Code and Details) -->
+        <div id="result" class="mt-8">
+            <div class="p-6 bg-blue-50 border border-blue-200 rounded-xl text-center text-blue-800">
+                <p>Enter the student information above to issue and generate the verifiable QR code.</p>
+            </div>
+        </div>
+
+        <p class="mt-8 text-center text-xs text-gray-400">Database collection path: <code>/artifacts/{appId}/public/data/certificates</code></p>
+
+    </div>
+
+</body>
+</html>
