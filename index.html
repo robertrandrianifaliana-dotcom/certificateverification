@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>UR - Certificate</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <img src="img.png"/>
+        <h1>UR - Certificate</h1>
+        <form id="certificate-form">
+            <label for="student-name">Student Full Name:</label>
+            <input type="text" id="student-name" required>
+            <label for="certificate-date">Certificate Date:</label>
+            <input type="date" id="certificate-date" required>
+            <label for="level">Level:</label>
+            <input type="text" id="level" required>
+            <label for="certificate-file">Certificate File:</label>
+            <input type="file" id="certificate-file" accept="image/*,application/pdf" required>
+            <button type="submit">Generate QR Code</button>
+        </form>
+        <div id="qrcode-container" style="display: none;">
+            <h2>Generated QR Code:</h2>
+            <div id="qrcode"></div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode-generator/qrcode.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
